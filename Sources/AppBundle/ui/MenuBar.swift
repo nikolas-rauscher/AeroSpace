@@ -74,11 +74,7 @@ public func menuBar(viewModel: TrayMenuModel) -> some Scene { // todo should it 
     } label: {
         switch (viewModel.axPermissionStatus, viewModel.isEnabled) {
             case (.granted, true):
-                HStack(spacing: 4) {
-                    Image(systemName: "rectangle.split.2x2")
-                    Text("AS \(viewModel.trayText)")
-                }
-                .accessibilityLabel("AeroSpace Personal, workspace \(viewModel.trayText)")
+                MenuBarLabel().environmentObject(viewModel)
             case (.granted, false):
                 Image(systemName: "pause.circle.fill")
                     .resizable()
