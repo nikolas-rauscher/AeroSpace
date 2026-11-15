@@ -35,4 +35,3 @@ private func parseAppMinimumWidths(_ raw: OrderedJson, _ backtrace: ConfigBacktr
 func parseDynamicTiling(_ raw: OrderedJson, _ backtrace: ConfigBacktrace, _ context: inout ConfigParserContext) -> DynamicTiling {
     parseNonEmptyTable(raw, DynamicTiling(), dynamicTilingParser, backtrace, &context)
 }
-
