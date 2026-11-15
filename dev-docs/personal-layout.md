@@ -75,3 +75,15 @@ directional focus, overflow, floating/fullscreen exclusions, app overrides, and
 measured minimum sizes in both dimensions. Multi-display policy needs a real
 display test in addition to the workspace-level tests. Native Cmd+Tab latency needs manual comparison;
 passing unit tests is not a latency measurement.
+
+## Personal app bundle and menu bar
+
+The personal bundle launches the Swift executable directly through
+`CFBundleExecutable`. Its optional `AeroSpacePersonalConfig` Info.plist value
+resolves a config path relative to the app bundle's parent directory. An explicit
+`--config-path` takes precedence. When the bundled default is used, the process
+writes `aerospace-personal.pid` beside the bundle for the trial stop script.
+
+The enabled menu-bar label uses a native SwiftUI grid symbol followed by
+`AS <workspace>`, making the personal version and current workspace identifiable.
+The permission and disabled states retain their existing warning labels.

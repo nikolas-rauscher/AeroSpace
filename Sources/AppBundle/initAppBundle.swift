@@ -110,6 +110,14 @@ private func initServerArgs() {
                 exit(EXIT_CODE_TWO, err: "Unrecognized flag \(args.first.orDie().singleQuoted)")
         }
     }
+    if serverArgs.configLocation == nil,
+       let relativePath = Bundle.main.object(forInfoDictionaryKey: "AeroSpacePersonalConfig") as? String
+    {
+        unsafe _serverArgs.configLocation = Bundle.main.bundleURL.deletingLastPathComponent()
+            .appending(path: relativePath).path
+        let pidFile = Bundle.main.bundleURL.deletingLastPathComponent().appending(path: "aerospace-personal.pid")
+        try? String(ProcessInfo.processInfo.processIdentifier).write(to: pidFile, atomically: true, encoding: .utf8)
+    }
     if let path = serverArgs.configLocation, !FileManager.default.fileExists(atPath: path) {
         exit(EXIT_CODE_TWO, err: "\(path) doesn't exist")
     }
