@@ -1,18 +1,42 @@
 import AppKit
 import Common
 
-/// Widths are in macOS points, not Retina pixels. One window always remains usable,
-/// even when the monitor itself is narrower than the configured minimum.
-func dynamicTilingCapacity(width: CGFloat, gap: CGFloat, minimumWidth: Int, maximum: Int, minimums: [CGFloat] = []) -> Int {
-    let limit = max(1, min(3, maximum))
-    return (1 ... limit).reversed().first { count in
-        let widths = minimums.prefix(count)
-        let missing = max(0, count - widths.count)
-        return widths.reduce(0, +) + CGFloat(missing) * CGFloat(max(1, minimumWidth)) + CGFloat(count - 1) * gap <= width
-    } ?? 1
+/// Physical rectangles in stable column-major order, matching the native tree.
+func dynamicTilingFrames(width: CGFloat, height: CGFloat, horizontalGap: CGFloat, verticalGap: CGFloat,
+                         minimumWidths: [CGFloat], minimumHeights: [CGFloat]) -> [Rect]? {
+    let count = minimumWidths.count
+    guard count == minimumHeights.count, count <= 4 else { return nil }
+    if count == 0 { return [] }
+    if count == 1 { return [Rect(topLeftX: 0, topLeftY: 0, width: max(1, width), height: max(1, height))] }
+    let left = count == 4 ? [0, 1] : [0]
+    let right = count == 4 ? [2, 3] : Array(1 ..< count)
+    let columnMinimums = [left.map { minimumWidths[$0] }.max()!, right.map { minimumWidths[$0] }.max()!]
+    guard columnMinimums.reduce(0, +) + horizontalGap <= width else { return nil }
+    let columns = dynamicTileLengths(width: width, gap: horizontalGap, minimums: columnMinimums)
+    let rightX = columns[0] + horizontalGap
+    if count == 2 {
+        guard minimumHeights.allSatisfy({ $0 <= height }) else { return nil }
+        return [Rect(topLeftX: 0, topLeftY: 0, width: columns[0], height: height),
+                Rect(topLeftX: rightX, topLeftY: 0, width: columns[1], height: height)]
+    }
+    let rowMinimums = count == 3 ? [minimumHeights[1], minimumHeights[2]] :
+        [max(minimumHeights[0], minimumHeights[2]), max(minimumHeights[1], minimumHeights[3])]
+    guard rowMinimums.reduce(0, +) + verticalGap <= height,
+          count != 3 || minimumHeights[0] <= height else { return nil }
+    let rows = dynamicTileLengths(width: height, gap: verticalGap, minimums: rowMinimums)
+    let bottomY = rows[0] + verticalGap
+    if count == 3 {
+        return [Rect(topLeftX: 0, topLeftY: 0, width: columns[0], height: height),
+                Rect(topLeftX: rightX, topLeftY: 0, width: columns[1], height: rows[0]),
+                Rect(topLeftX: rightX, topLeftY: bottomY, width: columns[1], height: rows[1])]
+    }
+    return [Rect(topLeftX: 0, topLeftY: 0, width: columns[0], height: rows[0]),
+            Rect(topLeftX: 0, topLeftY: bottomY, width: columns[0], height: rows[1]),
+            Rect(topLeftX: rightX, topLeftY: 0, width: columns[1], height: rows[0]),
+            Rect(topLeftX: rightX, topLeftY: bottomY, width: columns[1], height: rows[1])]
 }
 
-func dynamicColumnWidths(width: CGFloat, gap: CGFloat, minimums: [CGFloat]) -> [CGFloat] {
+func dynamicTileLengths(width: CGFloat, gap: CGFloat, minimums: [CGFloat]) -> [CGFloat] {
     guard !minimums.isEmpty else { return [] }
     var remaining = max(1, width - CGFloat(minimums.count - 1) * gap)
     var pending = Array(minimums.indices)
@@ -42,18 +66,81 @@ private func requiredWidth(_ window: Window) -> CGFloat {
 }
 
 @MainActor
-private func capacity(_ workspace: Workspace, adding window: Window? = nil) -> Int {
-    let monitor = workspace.workspaceMonitorInfo
-    let gaps = ResolvedGaps(gaps: config.gaps, monitor: monitor)
-    let windows = dynamicTilingWindows(workspace) + (window.map { [$0] } ?? [])
-    return dynamicTilingCapacity(width: monitor.visibleRectPaddedByOuterGaps.width,
-                                gap: CGFloat(gaps.inner.horizontal),
-                                minimumWidth: config.dynamicTiling.minimumWindowWidth,
-                                maximum: config.dynamicTiling.maxWindows,
-                                minimums: windows.map(requiredWidth))
+private func requiredHeight(_ window: Window) -> CGFloat {
+    max(CGFloat(config.dynamicTiling.minimumWindowHeight), window.minimumTilingHeight,
+        CGFloat(window.app.rawAppBundleId.flatMap { config.dynamicTiling.appMinimumHeights[$0] } ?? 0))
 }
 
-/// An opt-in policy: stable left-to-right order, equal columns, bounded occupancy.
+@MainActor
+private func frames(_ workspace: Workspace, windows: [Window]) -> [Rect]? {
+    let monitor = workspace.workspaceMonitorInfo
+    let rect = monitor.visibleRectPaddedByOuterGaps
+    let gaps = ResolvedGaps(gaps: config.gaps, monitor: monitor)
+    return dynamicTilingFrames(width: rect.width, height: max(1, rect.height - 1),
+                               horizontalGap: CGFloat(gaps.inner.horizontal), verticalGap: CGFloat(gaps.inner.vertical),
+                               minimumWidths: windows.map(requiredWidth), minimumHeights: windows.map(requiredHeight))
+}
+
+@MainActor
+private func capacity(_ workspace: Workspace, adding window: Window? = nil) -> Int {
+    let windows = dynamicTilingWindows(workspace) + (window.map { [$0] } ?? [])
+    let limit = max(1, min(4, config.dynamicTiling.maxWindows, windows.count))
+    return (1 ... limit).reversed().first { frames(workspace, windows: Array(windows.prefix($0))) != nil } ?? 1
+}
+
+@MainActor
+private func hasLayout(_ root: TilingContainer, windows: [Window]) -> Bool {
+    let children = root.inhabitedChildren
+    func stackMatches(_ node: TreeNode, _ expected: [Window]) -> Bool {
+        guard let stack = node as? TilingContainer, stack.layout == .tiles, stack.orientation == .v else { return false }
+        return stack.inhabitedChildren == expected.map { $0 as TreeNode }
+    }
+    switch windows.count {
+        case 0 ... 2: return children == windows.map { $0 as TreeNode }
+        case 3: return children.count == 2 && children[0] === windows[0] && stackMatches(children[1], Array(windows[1 ... 2]))
+        case 4: return children.count == 2 && stackMatches(children[0], Array(windows[0 ... 1])) && stackMatches(children[1], Array(windows[2 ... 3]))
+        default: return false
+    }
+}
+
+@MainActor
+private func applyLayout(_ workspace: Workspace) {
+    let root = workspace.rootTilingContainer
+    let windows = dynamicTilingWindows(workspace)
+    guard !windows.contains(where: \.isFullscreen), let rectangles = frames(workspace, windows: windows) else { return }
+    root.layout = .tiles
+    root.changeOrientation(.h)
+    if !hasLayout(root, windows: windows) {
+        for window in windows { window.bind(to: root, adaptiveWeight: 1, index: INDEX_BIND_LAST) }
+        for child in root.children where child is TilingContainer && child.isEffectivelyEmpty { child.unbindFromParent() }
+        if windows.count == 3 {
+            let stack = TilingContainer.newVTiles(parent: root, adaptiveWeight: 1, index: INDEX_BIND_LAST)
+            for window in windows[1 ... 2] { window.bind(to: stack, adaptiveWeight: 1, index: INDEX_BIND_LAST) }
+        } else if windows.count == 4 {
+            for group in [0 ... 1, 2 ... 3] {
+                let stack = TilingContainer.newVTiles(parent: root, adaptiveWeight: 1, index: INDEX_BIND_LAST)
+                for window in windows[group] { window.bind(to: stack, adaptiveWeight: 1, index: INDEX_BIND_LAST) }
+            }
+        }
+        // Rebinding can leave ancestors containing only invisible native tabs.
+        // Refresh their lifeStatus before deriving the active column indexes.
+        workspace.normalizeContainers()
+    }
+    let gaps = ResolvedGaps(gaps: config.gaps, monitor: workspace.workspaceMonitorInfo)
+    let hGap = CGFloat(gaps.inner.horizontal)
+    let vGap = CGFloat(gaps.inner.vertical)
+    for (columnIndex, child) in root.inhabitedChildren.enumerated() {
+        let firstIndex = windows.count == 4 ? columnIndex * 2 : columnIndex
+        child.setWeight(.h, rectangles[firstIndex].width + (windows.count > 1 ? hGap / 2 : 0))
+        if let stack = child as? TilingContainer {
+            for (row, window) in stack.inhabitedChildren.enumerated() {
+                window.setWeight(.v, rectangles[firstIndex + row].height + vGap / 2)
+            }
+        }
+    }
+}
+
+/// Opt-in layouts: one full window, two columns, master + stack, or a 2x2 grid.
 /// Floating windows and native fullscreen/minimized/hidden windows stay untouched.
 @MainActor
 func applyDynamicTiling(to visibleWorkspaces: [Workspace]) {
@@ -88,25 +175,7 @@ func applyDynamicTiling(to visibleWorkspaces: [Workspace]) {
         }
     }
 
-    for workspace in visibleWorkspaces + overflowWorkspaces {
-        let root = workspace.rootTilingContainer
-        let windows = dynamicTilingWindows(workspace)
-        guard !windows.contains(where: \.isFullscreen) else { continue }
-        // Don't rebind on every AX refresh: that would churn MRU and native-tab state.
-        if windows.contains(where: { $0.parent !== root }) {
-            for window in windows { window.bind(to: root, adaptiveWeight: 1, index: INDEX_BIND_LAST) }
-            for child in root.children where child is TilingContainer && child.isEffectivelyEmpty { child.unbindFromParent() }
-        }
-        root.layout = .tiles
-        root.changeOrientation(.h)
-        let monitor = workspace.workspaceMonitorInfo
-        let gap = CGFloat(ResolvedGaps(gaps: config.gaps, monitor: monitor).inner.horizontal)
-        let widths = dynamicColumnWidths(width: monitor.visibleRectPaddedByOuterGaps.width, gap: gap, minimums: windows.map(requiredWidth))
-        for (index, window) in windows.enumerated() {
-            let gapCharge = windows.count == 1 ? 0 : (index == 0 || index == windows.count - 1 ? gap / 2 : gap)
-            window.setWeight(.h, widths[index] + gapCharge)
-        }
-    }
+    for workspace in visibleWorkspaces + overflowWorkspaces { applyLayout(workspace) }
     // Follow a newly focused window if it overflowed. Other moves don't steal focus.
     if let focusedWindow, focusedWindow.nodeWorkspace != globalFocus.workspace { _ = focusedWindow.focusWindow() }
     focusedWindow?.markAsMostRecentChild()
@@ -116,12 +185,20 @@ func applyDynamicTiling(to visibleWorkspaces: [Workspace]) {
 /// Some apps silently clamp requested sizes instead of reporting an AX error.
 @MainActor
 @discardableResult
-func recordDynamicTilingMinimumWidth(_ window: Window, requested: CGFloat, actual: CGFloat) -> Bool {
-    guard config.dynamicTiling.enabled, !window.isFloating, !window.isFullscreen,
+func recordDynamicTilingMinimumSize(_ window: Window, requested: CGSize, actual: CGSize) -> Bool {
+    guard config.dynamicTiling.enabled, window.lifeStatus == .alive, !window.isFloating, !window.isFullscreen,
           window.windowParentCases?.kind == .tilingContainer,
-          window.lastAppliedLayoutPhysicalRect?.width == requested,
-          actual > requested + 2, actual > window.minimumTilingWidth,
+          window.lastAppliedLayoutPhysicalRect?.width == requested.width,
+          window.lastAppliedLayoutPhysicalRect?.height == requested.height,
           currentlyManipulatedWithMouseWindowId != window.windowId else { return false }
-    window.minimumTilingWidth = ceil(actual)
-    return true
+    var changed = false
+    if actual.width > requested.width + 2 && actual.width > window.minimumTilingWidth {
+        window.minimumTilingWidth = ceil(actual.width)
+        changed = true
+    }
+    if actual.height > requested.height + 2 && actual.height > window.minimumTilingHeight {
+        window.minimumTilingHeight = ceil(actual.height)
+        changed = true
+    }
+    return changed
 }

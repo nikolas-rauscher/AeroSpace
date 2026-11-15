@@ -171,17 +171,18 @@ final class MacApp: AbstractApp {
         }
     }
 
-    func setAxFrame(_ windowId: OpaqueWindowId, _ topLeft: Point?, _ size: CGSize?, checkMinimumWidth: Bool = false) {
+    func setAxFrame(_ windowId: OpaqueWindowId, _ topLeft: Point?, _ size: CGSize?, checkMinimumSize: Bool = false) {
         setFrameJobs.removeValue(forKey: windowId)?.cancel()
         setFrameJobs[windowId] = withWindowAsync(windowId, .cancellable) { [axApp] window, job in
             try disableAnimations(app: axApp.threadGuarded, job) {
                 try setFrame(window, topLeft, size, job)
             }
-            if checkMinimumWidth, let requested = size?.width, let actual = window.get(Ax.sizeAttr)?.width, actual > requested + 2 {
+            if checkMinimumSize, let requested = size, let actual = window.get(Ax.sizeAttr),
+               actual.width > requested.width + 2 || actual.height > requested.height + 2 {
                 Task.startUnstructured { @MainActor in
                     guard let model = MacWindow.allWindowsMap[windowId] else { return }
-                    if recordDynamicTilingMinimumWidth(model, requested: requested, actual: actual) {
-                        scheduleCancellableCompleteRefreshSession(.ax("dynamic-tiling-minimum-width"))
+                    if recordDynamicTilingMinimumSize(model, requested: requested, actual: actual) {
+                        scheduleCancellableCompleteRefreshSession(.ax("dynamic-tiling-minimum-size"))
                     }
                 }
             }

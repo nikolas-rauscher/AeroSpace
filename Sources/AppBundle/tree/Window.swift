@@ -9,6 +9,7 @@ open class Window: TreeNode, Hashable {
     var noOuterGapsInFullscreen: Bool = false
     var layoutReason: LayoutReason = .standard
     var minimumTilingWidth: CGFloat = 0
+    var minimumTilingHeight: CGFloat = 0
     var lifeStatus: WindowLifeStatus = .alive
 
     @MainActor

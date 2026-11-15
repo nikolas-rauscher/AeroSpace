@@ -207,7 +207,7 @@ final class MacWindow: Window {
     }
 
     @MainActor override func setAxFrame(_ topLeft: Point?, _ size: CGSize?) {
-        macApp.setAxFrame(windowId, topLeft, size, checkMinimumWidth: config.dynamicTiling.enabled)
+        macApp.setAxFrame(windowId, topLeft, size, checkMinimumSize: config.dynamicTiling.enabled)
     }
 
     override func getAxRect(_ cm: CancellationMode) async throws -> Rect? {

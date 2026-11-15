@@ -1,4 +1,4 @@
-# Automatic columns and native app switching
+# Automatic layouts and native app switching
 
 This fork adds two opt-in behaviours. Both are disabled by default, so an existing
 configuration keeps AeroSpace's upstream behaviour.
@@ -8,33 +8,41 @@ fast-app-switching = true
 
 [dynamic-tiling]
 enabled = true
-max-windows = 3
+max-windows = 4
 minimum-window-width = 560
+minimum-window-height = 320
 app-minimum-widths = { 'net.whatsapp.WhatsApp' = 800 }
 ```
 
 All widths are macOS points, not physical Retina pixels.
 
-## Automatic columns
+## Automatic layouts
 
-Visible workspaces use a flat, horizontal tiling layout. One window fills the
-usable display, two windows sit side by side, and up to three windows share the
-display when their minimum widths and gaps fit. Nested containers are flattened
-automatically. Columns are equal unless an app needs more than its equal share;
-in that case, it receives its minimum and the remaining width is shared among
-the other windows.
+The window count determines the native tiling tree automatically:
+
+- One window fills the usable display.
+- Two windows are side by side.
+- Three windows use a full-height master on the left and two stacked windows on the right.
+- Four windows form a 2x2 grid.
+
+The master starts at half the display width, giving it twice the area of either
+stacked window. Column widths and row heights adapt to app minima when necessary.
+The four-window grid keeps a shared row boundary across both columns. Window
+order is stable and column-major; normal focus changes do not change the master.
+Matching containers are reused across refreshes, so navigation, dragging, and
+window placement use the same native tree as the visible layout.
 
 When the windows do not fit, excess windows move to a visible workspace on another
 display that has room. If none does, the policy creates `auto-1`, `auto-2`, etc.
 on the source display. The focused window is followed if it moves. Workspaces
 with explicit fullscreen windows, floating windows, native minimized/hidden
 windows, and popups retain their existing behaviour. Closing a window expands the
-remaining columns; it does not pull windows back from other workspaces.
+remaining layout; it does not pull windows back from other workspaces.
 
 The policy reads back a completed AX resize. If an app silently refuses to become
-as narrow as requested, the observed minimum is retained for that window's
-lifetime and layout is retried. Per-app overrides can anticipate known limits.
-An app whose minimum is wider than the whole display still cannot be made to fit
+as narrow or short as requested, the observed width or height is retained for
+that window's lifetime and layout is retried. Per-app overrides can anticipate known limits.
+An app whose minimum exceeds the whole display still cannot be made to fit
 by a window manager. A transient minimum may be conservative until the app's
 window is reopened.
 
@@ -62,8 +70,8 @@ temporarily disables the release server on startup and re-enables it on a normal
 exit. Pass a separate configuration with `--config-path` for a trial run. Do not
 commit personal configs, runtime snapshots, or backups to this public repository.
 
-`DynamicTilingTest` covers capacity, gaps, horizontal flattening, overflow,
-focus preservation, floating/fullscreen exclusions, app overrides, and measured
-minimum widths. Multi-display policy needs a real display test in addition to
-the workspace-level tests. Native Cmd+Tab latency needs manual comparison;
+`DynamicTilingTest` covers 1–4 window geometry, gaps, native tree transitions,
+directional focus, overflow, floating/fullscreen exclusions, app overrides, and
+measured minimum sizes in both dimensions. Multi-display policy needs a real
+display test in addition to the workspace-level tests. Native Cmd+Tab latency needs manual comparison;
 passing unit tests is not a latency measurement.
