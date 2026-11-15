@@ -8,6 +8,7 @@ open class Window: TreeNode, Hashable {
     var isFullscreen: Bool = false
     var noOuterGapsInFullscreen: Bool = false
     var layoutReason: LayoutReason = .standard
+    var minimumTilingWidth: CGFloat = 0
     var lifeStatus: WindowLifeStatus = .alive
 
     @MainActor
@@ -51,7 +52,7 @@ open class Window: TreeNode, Hashable {
     func getAxRect(_ cm: CancellationMode) async throws -> Rect? { die("Not implemented") }
     func getCenter(_ cm: CancellationMode) async throws -> Point? { try await getAxRect(cm)?.center }
 
-    func setAxFrame(_ topLeft: Point?, _ size: CGSize?) { die("Not implemented") }
+    @MainActor func setAxFrame(_ topLeft: Point?, _ size: CGSize?) { die("Not implemented") }
 }
 
 enum MacosWindowNativeState: Sendable {

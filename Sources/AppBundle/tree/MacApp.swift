@@ -171,11 +171,19 @@ final class MacApp: AbstractApp {
         }
     }
 
-    func setAxFrame(_ windowId: OpaqueWindowId, _ topLeft: Point?, _ size: CGSize?) {
+    func setAxFrame(_ windowId: OpaqueWindowId, _ topLeft: Point?, _ size: CGSize?, checkMinimumWidth: Bool = false) {
         setFrameJobs.removeValue(forKey: windowId)?.cancel()
         setFrameJobs[windowId] = withWindowAsync(windowId, .cancellable) { [axApp] window, job in
             try disableAnimations(app: axApp.threadGuarded, job) {
                 try setFrame(window, topLeft, size, job)
+            }
+            if checkMinimumWidth, let requested = size?.width, let actual = window.get(Ax.sizeAttr)?.width, actual > requested + 2 {
+                Task.startUnstructured { @MainActor in
+                    guard let model = MacWindow.allWindowsMap[windowId] else { return }
+                    if recordDynamicTilingMinimumWidth(model, requested: requested, actual: actual) {
+                        scheduleCancellableCompleteRefreshSession(.ax("dynamic-tiling-minimum-width"))
+                    }
+                }
             }
         }
     }
@@ -205,6 +213,12 @@ final class MacApp: AbstractApp {
         try await withWindow(windowId, cm) { window, job in
             try AppBundle::getAxRect(window: window, job: job)
         }
+    }
+
+    /// A FIFO barrier on this app's AX run loop. Unlike another AX query, this
+    /// adds no round trip to the app: it just waits for queued frame writes.
+    func waitForPendingFrameChanges() async throws {
+        _ = try await thread?.runInLoop(.cancellable) { _ in () }
     }
 
     func getAxRectForTermination(_ windowId: OpaqueWindowId) -> Rect? {

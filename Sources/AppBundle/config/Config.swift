@@ -51,6 +51,8 @@ struct Config: Withable {
     var keyMapping = KeyMapping()
     var execConfig: ExecConfig = ExecConfig()
     var focusFollowsMouse: FocusFollowsMouse = FocusFollowsMouse()
+    var dynamicTiling = DynamicTiling()
+    var fastAppSwitching = false
 
     var onFocusChanged: Shell<any Command> = .empty
     // var onFocusedWorkspaceChanged: [any Command] = []

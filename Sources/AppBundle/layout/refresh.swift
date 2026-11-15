@@ -8,10 +8,22 @@ private var activeRefreshTask: Task<(), any Error>? = nil
 func scheduleCancellableCompleteRefreshSession(
     _ event: RefreshSessionEvent,
     optimisticallyPreLayoutWorkspaces: Bool = false,
+    cachedActivation: MacWindow? = nil,
 ) {
     activeRefreshTask?.cancel()
     activeRefreshTask = Task.startUnstructured { @MainActor in
         try checkCancellation()
+        // Cmd+Tab has already activated this app. Reveal its cached workspace
+        // before waiting for the app's AX queue or refreshing every other app.
+        // The regular refresh below still verifies the actual focused window.
+        if let cachedActivation, cachedActivation.lifeStatus == .alive,
+           cachedActivation.app.pid == NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           cachedActivation.nodeWorkspace?.isVisible == false
+        {
+            updateFocusCache(cachedActivation)
+            try await layoutWorkspaces()
+            updateTrayText()
+        }
         await runHeavyCompleteRefreshSession(
             event,
             assumeCancellable: true,
@@ -42,10 +54,10 @@ func runHeavyCompleteRefreshSession(
             try await refresh()
             gcMonitors()
 
-            updateTrayText()
             SecureInputPanel.shared.refresh()
             try await normalizeLayoutReason()
             if shouldLayoutWorkspaces { try await layoutWorkspaces() }
+            updateTrayText()
         }
     }
     switch res {
@@ -75,11 +87,10 @@ func runLightSession<T>(
         let result = try await body()
         await refreshModel_nonCancellable()
 
+        if !event.isFocusFollowsMouse { try await layoutWorkspaces() }
         let focusAfter = globalFocus.windowOrNil
-
         updateTrayText()
         SecureInputPanel.shared.refresh()
-        if !event.isFocusFollowsMouse { try await layoutWorkspaces() }
         if focusBefore != focusAfter {
             focusAfter?.nativeFocus() // syncFocusToMacOs
         }
@@ -160,6 +171,7 @@ private func layoutWorkspaces() async throws {
         return
     }
     let monitors = globalUnsortedMonitorInfos
+    applyDynamicTiling(to: monitors.map(\.visibleWorkspace))
     var monitorToOptimalHideCorner: [Point: OptimalHideCorner] = [:]
     for monitor in monitors {
         let xOff = monitor.width * 0.1
@@ -190,6 +202,18 @@ private func layoutWorkspaces() async throws {
         let workspace = monitor.visibleWorkspace
         workspace.allLeafWindowsRecursive.forEach { ($0 as! MacWindow).unhideFromCorner() } // todo as!
         try await workspace.layoutWorkspace()
+    }
+    if config.fastAppSwitching {
+        // Frame writes are asynchronous and apps have independent AX queues.
+        // Keep the previous workspace covering the desktop until the new
+        // workspace's queued writes have completed, then hide the old windows.
+        var apps: [Int32: MacApp] = [:]
+        for monitor in monitors {
+            for window in monitor.visibleWorkspace.allInhabitedLeafWindowsRecursive {
+                if let app = window.app as? MacApp { apps[app.pid] = app }
+            }
+        }
+        _ = try await Array(apps.values).mapConcurrently { try await $0.waitForPendingFrameChanges() }
     }
     for workspace in Workspace.all where !workspace.isVisible {
         let corner = monitorToOptimalHideCorner[workspace.workspaceMonitorInfo.rect.topLeftCorner] ?? .bottomRightCorner

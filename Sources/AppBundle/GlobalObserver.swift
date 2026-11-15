@@ -9,10 +9,14 @@ enum GlobalObserver {
             return
         }
         let notifName = notification.name.rawValue
+        let activatedPID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
         Task.startUnstructured { @MainActor in
             if !TrayMenuModel.shared.isEnabled { return }
             if notifName == NSWorkspace.didActivateApplicationNotification.rawValue {
-                scheduleCancellableCompleteRefreshSession(.globalObserver(notifName), optimisticallyPreLayoutWorkspaces: true)
+                let cachedWindow = config.fastAppSwitching
+                    ? activatedPID.flatMap { MacApp.allAppsMap[$0]?.lastFocusedNativeWindowOpaqueId }.flatMap { MacWindow.allWindowsMap[$0] }
+                    : nil
+                scheduleCancellableCompleteRefreshSession(.globalObserver(notifName), optimisticallyPreLayoutWorkspaces: true, cachedActivation: cachedWindow)
             } else {
                 scheduleCancellableCompleteRefreshSession(.globalObserver(notifName))
             }
